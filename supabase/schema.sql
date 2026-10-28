@@ -1,0 +1,13 @@
+create table if not exists public.profiles (id uuid primary key references auth.users(id) on delete cascade,display_name text,plan text not null default 'free' check(plan in ('free','monthly','yearly')),plan_expires_at timestamptz,stripe_customer_id text unique,stripe_subscription_id text unique,created_at timestamptz not null default now());
+create table if not exists public.bmi_records (id uuid primary key default gen_random_uuid(),user_id uuid not null references auth.users(id) on delete cascade,weight_kg numeric(7,2) not null check(weight_kg>0 and weight_kg<=600),height_m numeric(4,2) not null check(height_m>=0.5 and height_m<=2.7),bmi numeric(6,2) not null,category text not null,created_at timestamptz not null default now());
+create index if not exists bmi_records_user_created_idx on public.bmi_records(user_id,created_at desc);
+alter table public.profiles enable row level security;
+alter table public.bmi_records enable row level security;
+create policy "profiles_select_self" on public.profiles for select to authenticated using ((select auth.uid())=id);
+create policy "bmi_select_self" on public.bmi_records for select to authenticated using ((select auth.uid())=user_id);
+create policy "bmi_insert_self" on public.bmi_records for insert to authenticated with check ((select auth.uid())=user_id);
+create policy "bmi_delete_self" on public.bmi_records for delete to authenticated using ((select auth.uid())=user_id);
+create or replace function public.create_user_profile() returns trigger language plpgsql security definer set search_path='' as $$begin insert into public.profiles(id,display_name) values(new.id,coalesce(new.raw_user_meta_data->>'full_name',new.email)) on conflict(id) do nothing;return new;end;$$;
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created after insert on auth.users for each row execute procedure public.create_user_profile();
+insert into public.profiles(id,display_name) select id,coalesce(raw_user_meta_data->>'full_name',email) from auth.users on conflict(id) do nothing;
